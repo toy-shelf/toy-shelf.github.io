@@ -1,1 +1,283 @@
-init
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Mobile 3D 手勢範例（CDN 版）</title>
+  <!-- Tailwind CDN for quick layout -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    html, body, #app { height: 100%; }
+    /* Prevent browser gesture conflicts on canvas */
+    canvas { touch-action: none; display: block; }
+    /* Simple button styles (avoid dynamic Tailwind classes) */
+    .btn { font-size: 14px; padding: 0.375rem 0.75rem; border-radius: 0.75rem; border: 1px solid #d4d4d8; background: #fff; color: #374151; }
+    .btn.active { background: #fde047; border-color: #f59e0b; color: #111827; box-shadow: 0 1px 2px rgba(0,0,0,.1); }
+  </style>
+</head>
+<body class="bg-neutral-50">
+  <div id="app" class="relative w-screen h-screen overflow-hidden select-none">
+    <div id="three-root" class="w-full h-full"></div>
+
+    <!-- UI overlay -->
+    <div class="pointer-events-none absolute inset-0 flex flex-col">
+      <div class="mt-2 self-center text-xs text-neutral-600 bg-white/70 rounded-full px-3 py-1 shadow">一指旋轉 兩指縮放｜左右滑動切換</div>
+      <div id="swipe-layer" class="mt-auto mb-4 w-full flex justify-center">
+        <div class="pointer-events-auto bg-white/80 backdrop-blur rounded-2xl shadow px-2 py-2 flex gap-2">
+          <button class="btn active" data-subject="duck">小鴨</button>
+          <button class="btn" data-subject="teapot">茶壺</button>
+          <button class="btn" data-subject="sphere">球</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    // Import Three.js modules from CDN
+    import * as THREE from 'https://unpkg.com/three@0.165.0/build/three.module.js';
+    import { OrbitControls } from 'https://unpkg.com/three@0.165.0/examples/jsm/controls/OrbitControls.js';
+    import { TeapotGeometry } from 'https://unpkg.com/three@0.165.0/examples/jsm/geometries/TeapotGeometry.js';
+
+    /**
+     * Mobile 3D demo with gesture rotation and swipe-to-switch subjects
+     * Subjects: duck (default), teapot, sphere
+     * Controls: one-finger rotate, two-finger pan/zoom, swipe left/right to switch
+     */
+
+    // DOM refs
+    const container = document.getElementById('three-root');
+    const swipeLayer = document.getElementById('swipe-layer');
+    const subjectButtons = Array.from(document.querySelectorAll('button[data-subject]'));
+
+    // Core objects
+    let renderer, scene, camera, controls;
+    let modelRoot = null; // current subject root
+    let subject = 'duck';
+
+    // Swipe detection state
+    let touchActive = false;
+    let touchStartX = 0;
+    let touchStartY = 0;
+
+    init();
+    switchSubject('duck');
+    animate();
+
+    function init() {
+      // Scene
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0xf7f7f9);
+
+      // Camera
+      camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.1, 100);
+      camera.position.set(2.8, 1.6, 2.8);
+
+      // Renderer
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setSize(container.clientWidth, container.clientHeight);
+      container.appendChild(renderer.domElement);
+
+      // Lights
+      const hemi = new THREE.HemisphereLight(0xffffff, 0xcccccc, 1.0);
+      hemi.position.set(0, 1, 0);
+      scene.add(hemi);
+
+      const dir = new THREE.DirectionalLight(0xffffff, 1.0);
+      dir.position.set(5, 5, 3);
+      scene.add(dir);
+
+      // Floor
+      const floorGeo = new THREE.CircleGeometry(5, 64);
+      const floorMat = new THREE.MeshStandardMaterial({ color: 0xeeeeee, roughness: 1, metalness: 0 });
+      const floor = new THREE.Mesh(floorGeo, floorMat);
+      floor.rotation.x = -Math.PI / 2;
+      floor.position.y = -0.5;
+      scene.add(floor);
+
+      // Controls
+      controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.08;
+      controls.minDistance = 1.2;
+      controls.maxDistance = 8;
+      controls.target.set(0, 0.2, 0);
+
+      // Resize
+      window.addEventListener('resize', () => {
+        camera.aspect = container.clientWidth / container.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(container.clientWidth, container.clientHeight);
+      });
+
+      // Buttons click
+      subjectButtons.forEach(btn => {
+        btn.addEventListener('click', () => switchSubject(btn.dataset.subject));
+      });
+
+      // Swipe handlers on the bottom layer
+      swipeLayer.addEventListener('touchstart', (e) => {
+        if (!e.touches || e.touches.length === 0) return;
+        touchActive = true;
+        touchStartX = e.touches[0].clientX;
+        touchStartY = e.touches[0].clientY;
+      }, { passive: true });
+
+      swipeLayer.addEventListener('touchend', (e) => {
+        if (!touchActive) return;
+        touchActive = false;
+        const t = e.changedTouches && e.changedTouches[0];
+        if (!t) return;
+        const dx = t.clientX - touchStartX;
+        const dy = t.clientY - touchStartY;
+        if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy)) {
+          const dir = dx < 0 ? 1 : -1;
+          switchSubject(nextSubject(subject, dir));
+        }
+      });
+    }
+
+    function animate() {
+      renderer.setAnimationLoop(() => {
+        controls.update();
+        renderer.render(scene, camera);
+      });
+    }
+
+    function switchSubject(name) {
+      subject = name;
+      // Update button active state
+      subjectButtons.forEach(btn => btn.classList.toggle('active', btn.dataset.subject === subject));
+
+      // Remove old
+      if (modelRoot) {
+        scene.remove(modelRoot);
+        disposeObject(modelRoot);
+        modelRoot = null;
+      }
+
+      // Add new
+      if (subject === 'duck') modelRoot = buildDuck();
+      else if (subject === 'teapot') modelRoot = buildTeapot();
+      else modelRoot = buildSphere();
+
+      modelRoot.position.y = -0.1;
+      scene.add(modelRoot);
+
+      controls.target.set(0, 0.2, 0);
+    }
+
+    function nextSubject(current, dir) {
+      const list = ['duck', 'teapot', 'sphere'];
+      const idx = list.indexOf(current);
+      const next = (idx + dir + list.length) % list.length;
+      return list[next];
+    }
+
+    // -------- Models --------
+    function buildDuck() {
+      const group = new THREE.Group();
+
+      // Materials
+      const yellow = new THREE.MeshStandardMaterial({ color: 0xffd54f, roughness: 0.6, metalness: 0.05 });
+      const orange = new THREE.MeshStandardMaterial({ color: 0xff8f00, roughness: 0.7, metalness: 0.05 });
+      const black = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.8, metalness: 0.02 });
+      const white = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2, metalness: 0.05 });
+
+      // Body
+      const body = new THREE.Mesh(new THREE.SphereGeometry(0.6, 32, 24), yellow);
+      body.scale.set(1.6, 1.1, 1.0);
+      group.add(body);
+
+      // Head
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.32, 32, 24), yellow);
+      head.position.set(0.45, 0.35, 0);
+      group.add(head);
+
+      // Beak
+      const beak = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.12, 0.28, 24), orange);
+      beak.rotation.z = Math.PI / 2;
+      beak.position.set(0.68, 0.3, 0);
+      group.add(beak);
+
+      // Eyes
+      const eyeGeo = new THREE.SphereGeometry(0.035, 16, 12);
+      const eyeL = new THREE.Mesh(eyeGeo, black); eyeL.position.set(0.53, 0.39, 0.11);
+      const eyeR = eyeL.clone(); eyeR.position.z = -0.11;
+      group.add(eyeL, eyeR);
+
+      // Highlights
+      const dotGeo = new THREE.SphereGeometry(0.012, 12, 8);
+      const dotL = new THREE.Mesh(dotGeo, white); dotL.position.set(0.56, 0.41, 0.13);
+      const dotR = dotL.clone(); dotR.position.z = -0.13;
+      group.add(dotL, dotR);
+
+      // Wings
+      const wingGeo = new THREE.SphereGeometry(0.22, 24, 18);
+      const wingL = new THREE.Mesh(wingGeo, yellow);
+      wingL.scale.set(0.7, 1.0, 0.3);
+      wingL.position.set(0.05, 0.18, 0.33);
+      wingL.rotation.z = -0.3;
+      const wingR = wingL.clone(); wingR.position.z = -0.33; wingR.rotation.z = 0.3;
+      group.add(wingL, wingR);
+
+      // Tail
+      const tail = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.22, 16), yellow);
+      tail.position.set(-0.7, 0.02, 0);
+      tail.rotation.z = Math.PI * 0.9;
+      group.add(tail);
+
+      // Feet
+      const footGeo = new THREE.BoxGeometry(0.22, 0.04, 0.26);
+      const footL = new THREE.Mesh(footGeo, orange); footL.position.set(0.1, -0.48, 0.18);
+      const footR = footL.clone(); footR.position.z = -0.18;
+      group.add(footL, footR);
+
+      // Idle motion
+      const root = new THREE.Group();
+      root.add(group);
+      const clock = new THREE.Clock();
+      root.onBeforeRender = () => {
+        const t = clock.getElapsedTime();
+        group.position.y = -0.1 + Math.sin(t * 1.6) * 0.01;
+        head.rotation.z = Math.sin(t * 1.2) * 0.04;
+      };
+      return root;
+    }
+
+    function buildTeapot() {
+      const root = new THREE.Group();
+      const mesh = new THREE.Mesh(
+        new TeapotGeometry(0.55, 10, true, true, true, true),
+        new THREE.MeshStandardMaterial({ color: 0xb0bec5, roughness: 0.35, metalness: 0.6 })
+      );
+      root.add(mesh);
+      return root;
+    }
+
+    function buildSphere() {
+      const root = new THREE.Group();
+      const mesh = new THREE.Mesh(
+        new THREE.SphereGeometry(0.7, 32, 24),
+        new THREE.MeshStandardMaterial({ color: 0x90caf9, roughness: 0.5, metalness: 0.2 })
+      );
+      root.add(mesh);
+      return root;
+    }
+
+    // Clean up helper
+    function disposeObject(obj) {
+      if (!obj) return;
+      obj.traverse(child => {
+        if (child.isMesh) {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+            else child.material.dispose();
+          }
+        }
+      });
+    }
+  </script>
+</body>
+</html>
